@@ -6,19 +6,108 @@ around the best match.
 
 ## How it works, and who does what
 
+### Zero-shot detection, in one paragraph
+
+A normal object detector is trained on a fixed list of classes ("dog",
+"car", "person" — maybe 80 of them). Zero-shot detection means the model
+was never given a fixed list — instead, at *inference* time you hand it an
+arbitrary text phrase ("red umbrella") and it tells you where in the image
+that phrase applies. It can do this because it was trained to compare
+images and text in a shared mathematical space, not to memorize class
+labels.
+
+### Hugging Face vs. PyTorch
+
 This project pairs Hugging Face's `transformers` library with raw PyTorch,
 and each does a distinct job:
 
-- **Hugging Face `transformers`** supplies the pretrained model: a
-  zero-shot object detector that can look for *any* text description, not
-  just a fixed list of classes it was trained on. We just load it and run
-  a forward pass — no training involved.
-- **PyTorch** does everything *after* the model runs. The model's raw
-  output is just two tensors (per-box confidence scores and per-box
-  coordinates). Turning that into "here's one box on the image, or nothing"
-  is hand-written tensor math: box format conversion, confidence
-  thresholding, and non-max suppression — all done manually instead of
-  using the library's built-in post-processing helper.
+- **Hugging Face `transformers`** supplies the pretrained *brain* — the
+  model architecture code plus millions of learned weights, already
+  trained by Google on huge image/text datasets — and the `Owlv2Processor`,
+  which handles the fiddly input prep (resizing/normalizing the image,
+  tokenizing the text) so the tensors going into the model are shaped
+  correctly. We just load it and run a forward pass — no training
+  involved.
+- **PyTorch** is the tensor math underneath everything — both *inside* the
+  HF model (attention, convolutions, etc., which we don't touch) and,
+  deliberately in this project, in the code written by hand in
+  `postprocess.py` to turn raw numbers into a real answer: box format
+  conversion, confidence thresholding via sigmoid, and non-max suppression
+  — all done manually instead of calling the library's built-in
+  post-processing helper.
+
+### Inside OWL-ViT: how the encoders work
+
+OWL-ViT is built on **CLIP**'s idea: two separate transformer encoders —
+one for images, one for text — trained so that matching image/text pairs
+land close together in the same embedding space, and non-matching pairs
+land far apart.
+
+- **Vision transformer (ViT) encoder**: the image is chopped into a grid
+  of fixed-size patches (e.g. 16x16 pixels each — that's the "patch16" in
+  the model name). Each patch is flattened into a vector, and all patches
+  are fed through stacked self-attention layers, the same way words are
+  processed in a language transformer. Self-attention lets every patch
+  "look at" every other patch, so a patch representing part of a
+  nutcracker's hat can be informed by nearby patches showing its body. The
+  output is one embedding vector *per patch*, not just one for the whole
+  image.
+- **Text encoder**: the object phrase is tokenized and pushed through its
+  own transformer, producing a single embedding vector for the phrase.
+
+Standard CLIP would then squash the whole image down to one vector and
+compare it to the text vector. OWL-ViT's key trick is that it **doesn't**
+collapse the image into one vector — it keeps every patch's embedding
+separate, and treats every patch as a candidate "is there an object here
+matching this text?" query. Each patch embedding gets compared against the
+text embedding to produce a matching score, and a small regression head
+predicts a bounding box for that patch. That's why the model's raw output
+is one score and one box *per patch location*, not just one answer for the
+whole image — hundreds of candidate boxes come out, most of them junk, and
+it's `postprocess.py`'s job to whittle that down to the real one.
+
+### The pipeline, step by step
+
+1. **`query_parser.py`** — pure string matching, no ML at all. OWL-ViT's
+   text encoder was trained on short phrases like "a photo of a red
+   umbrella," not conversational sentences, so `"please find the red
+   umbrella"` gets stripped down to `"red umbrella"` before it ever
+   touches the model.
+2. **`detector.py`** (`run_detection()`):
+   - The `Owlv2Processor` turns the image into a normalized pixel tensor
+     and the text phrase into token IDs.
+   - `model(**inputs)` runs the forward pass — image through the ViT
+     encoder, text through the text encoder, patch embeddings compared
+     against the text embedding, boxes regressed.
+   - We deliberately grab the *raw* outputs: `logits` (one raw score per
+     patch — how well that patch matches "red umbrella") and `pred_boxes`
+     (one box per patch, in normalized `center_x, center_y, width, height`
+     form, values between 0 and 1 regardless of actual image size).
+3. **`postprocess.py`** — the hand-written PyTorch:
+   - `torch.sigmoid(logits)` — sigmoid, not softmax, because this isn't
+     "pick one class out of a fixed list" (which is what softmax is for).
+     Each patch/box gets an *independent* yes/no confidence for "does this
+     match the text," since the vocabulary is open-ended.
+   - `confidence_threshold` filtering throws out the hundreds of
+     low-confidence junk boxes.
+   - `cxcywh_to_xyxy` converts center/width/height format into corner
+     coordinates (top-left, bottom-right), which is what's needed to
+     actually draw a rectangle.
+   - `scale_to_image` multiplies the normalized 0-1 coordinates by the
+     real image's pixel width/height, since the model has no idea what
+     size the actual image is.
+   - **NMS from scratch**: even after thresholding, you often get several
+     overlapping boxes all pointing at the *same* object (neighboring
+     patches all fire on the same nutcracker). NMS's job: sort boxes by
+     confidence, greedily keep the best one, then throw away any remaining
+     box that overlaps it too much (measured by IoU — intersection area
+     over union area, in `box_iou`), repeat. What survives is one box per
+     distinct object.
+   - `get_best_detection` glues all of that together and returns the
+     single highest-confidence surviving box, or `None`.
+4. **`app.py`** just wires the UI to this pipeline and draws the winning
+   box with Pillow if one exists, otherwise shows the "couldn't find it"
+   message.
 
 ## Files
 
@@ -81,8 +170,8 @@ hundred MB) and cache them locally.
 python app.py
 ```
 
-This launches a local Gradio server and opens the app in your browser
-(default: http://127.0.0.1:7860).
+This launches a local Gradio server and opens the app in your browser at
+http://127.0.0.1:3000.
 
 ## Usage
 
