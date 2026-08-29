@@ -1,4 +1,4 @@
-# AI I Spy
+# Zero-Shot Detection I Spy
 
 A local demo app that plays "I Spy": type a sentence describing an object,
 and the app tries to find it in a preset cluttered image, drawing a box
