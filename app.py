@@ -115,4 +115,9 @@ with gr.Blocks(title="AI I Spy") as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(server_port=3000)
+    # Hugging Face Spaces sets SPACE_ID and manages the port itself; only
+    # force port 3000 for local runs.
+    if os.environ.get("SPACE_ID"):
+        demo.launch()
+    else:
+        demo.launch(server_port=3000)
