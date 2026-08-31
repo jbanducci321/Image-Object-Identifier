@@ -17,4 +17,4 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push --force https://JBandu77:${HF_TOKEN}@huggingface.co/spaces/JBandu77/Image-Identifier-Test main
+          git push --force https://JBandu77:${HF_TOKEN}@huggingface.co/spaces/JBandu77/Image-Object-Identifier main
