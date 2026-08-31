@@ -1,3 +1,13 @@
+---
+title: AI I Spy
+emoji: 🔍
+colorFrom: yellow
+colorTo: orange
+sdk: gradio
+app_file: app.py
+pinned: false
+---
+
 # Zero-Shot Detection I Spy
 
 A local demo app that plays "I Spy": type a sentence describing an object,
